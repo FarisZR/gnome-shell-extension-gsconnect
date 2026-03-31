@@ -189,17 +189,17 @@ const Device = GObject.registerClass({
         if (!this.channel)
             return '';
 
-        // Bluetooth connections have no certificate so we use the host address
-        if (this.connection_type === 'bluetooth') {
-            // TRANSLATORS: Bluetooth address for remote device
-            return _('Bluetooth device at %s').format('???');
-        }
-
-        // FIXME: another ugly reach-around
-        const localCert = this.service.manager.backends.get('lan')?.certificate;
+        const localCert = this.service?.manager?.certificate;
         const remoteCert = this.channel?.peer_certificate;
-        if (!localCert || !remoteCert)
+
+        if (!localCert || !remoteCert) {
+            if (this.connection_type === 'bluetooth' && this.channel?.address) {
+                const address = this.channel.address.replace('bluetooth://', '');
+                return _('Bluetooth device at %s').format(address);
+            }
+
             return '';
+        }
 
         const checksum = new GLib.Checksum(GLib.ChecksumType.SHA256);
         let [a, b] = [localCert.pubkey_der(), remoteCert.pubkey_der()];
@@ -347,6 +347,7 @@ const Device = GObject.registerClass({
         if (this.channel === null) {
             this._outputQueue.length = 0;
         } else {
+            channel.device = this;
             this._handleIdentity(this.channel.identity);
             this._readLoop(channel);
         }
@@ -912,16 +913,16 @@ const Device = GObject.registerClass({
     _setPaired(paired) {
         this._resetPairRequest();
 
-        // For TCP connections we store or reset the TLS Certificate
-        if (this.connection_type === 'lan') {
-            if (paired) {
+        if (paired) {
+            if (this.channel?.peer_certificate) {
                 this.settings.set_string(
                     'certificate-pem',
                     this.channel.peer_certificate.certificate_pem
                 );
-            } else {
-                this.settings.reset('certificate-pem');
             }
+
+        } else {
+            this.settings.reset('certificate-pem');
         }
 
         // If we've become unpaired, stop all subprocesses and transfers
@@ -951,7 +952,7 @@ const Device = GObject.registerClass({
             if (this._incomingPairRequest) {
                 if (this.identity?.body.protocolVersion >= 8) {
                     const currentTimestamp = Math.floor(Date.now() / 1000);
-                    const diffTimestamp = Number.abs(this._pairingTimestamp - currentTimestamp);
+                    const diffTimestamp = Math.abs(this._pairingTimestamp - currentTimestamp);
                     if (diffTimestamp > ALLOWED_TIMESTAMP_TIME_DIFFERENCE_SECONDS) {
                         this._setPaired(false);
                         this.showNotification({
