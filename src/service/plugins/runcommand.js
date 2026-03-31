@@ -83,6 +83,9 @@ const RunCommandPlugin = GObject.registerClass({
     connected() {
         super.connected();
 
+        if (this.device.isBluetoothConnection)
+            return;
+
         this._sendCommandList();
         this._requestCommandList();
         this._handleCommandList(this.remote_commands);

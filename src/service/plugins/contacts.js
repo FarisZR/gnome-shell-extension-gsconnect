@@ -87,6 +87,10 @@ const ContactsPlugin = GObject.registerClass({
 
     connected() {
         super.connected();
+
+        if (this.device.isBluetoothConnection)
+            return;
+
         this._requestUids();
     }
 

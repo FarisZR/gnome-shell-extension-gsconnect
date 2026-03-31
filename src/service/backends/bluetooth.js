@@ -26,6 +26,7 @@ const BLUEZ_NAME = 'org.bluez';
 const BLUEZ_ROOT_PATH = '/';
 const BLUEZ_PROFILE_PATH = `${Config.APP_PATH}/BluetoothProfile`;
 const BLUEZ_SERVICE_UUID = '185f3df4-3268-4e3f-9fca-d4d5059915bd';
+const BLUEZ_RFCOMM_CHANNEL = 6;
 
 const DEVICE_IFACE = 'org.bluez.Device1';
 const OBJECT_MANAGER_IFACE = 'org.freedesktop.DBus.ObjectManager';
@@ -36,6 +37,7 @@ const MULTIPLEX_VERSION = 1;
 const MULTIPLEX_BUFFER_SIZE = 4096;
 const MULTIPLEX_DEFAULT_CHANNEL = 'a0d0aaf4-1072-4d81-aa35-902a954b1266';
 const CONNECT_RETRY_SECONDS = 15;
+const CONNECT_DELAY_MS = 20000;
 
 const MESSAGE_PROTOCOL_VERSION = 0;
 const MESSAGE_OPEN_CHANNEL = 1;
@@ -87,6 +89,16 @@ function _readBytesAsync(stream, count, cancellable = null) {
                     reject(e);
                 }
             });
+    });
+}
+
+
+function _sleepAsync(milliseconds) {
+    return new Promise(resolve => {
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, milliseconds, () => {
+            resolve();
+            return GLib.SOURCE_REMOVE;
+        });
     });
 }
 
@@ -186,6 +198,24 @@ function _buildMessage(type, uuid, data = new Uint8Array()) {
 
 
 function _loadResource(relativePath) {
+    const localPaths = [
+        GLib.build_filenamev([Config.PACKAGE_DATADIR, relativePath]),
+    ];
+
+    const modulePath = Gio.File.new_for_uri(import.meta.url).get_path();
+
+    if (modulePath !== null) {
+        localPaths.unshift(GLib.build_filenamev([
+            GLib.path_get_dirname(GLib.path_get_dirname(GLib.path_get_dirname(modulePath))),
+            relativePath,
+        ]));
+    }
+
+    for (const localPath of localPaths) {
+        if (GLib.file_test(localPath, GLib.FileTest.EXISTS))
+            return String.fromCharCode(...GLib.file_get_contents(localPath)[1]);
+    }
+
     const bytes = Gio.resources_lookup_data(
         GLib.build_filenamev([Config.APP_PATH, relativePath]),
         Gio.ResourceLookupFlags.NONE
@@ -324,6 +354,7 @@ class MultiplexSubchannel {
             if (!this.connected)
                 throw _closedError('End of stream');
 
+            this._multiplexer.requestRead(this._state);
             await this._wait('read', cancellable);
         }
     }
@@ -791,6 +822,7 @@ export const ChannelService = GObject.registerClass({
 
         this._registered = false;
         this._connectAttempts = new Map();
+        this._connectTimers = new Map();
         this._deviceInfos = new Map();
         this._devicePaths = new Map();
         this._pendingOutgoing = new Set();
@@ -918,6 +950,9 @@ export const ChannelService = GObject.registerClass({
     async _registerProfile() {
         const options = {
             'Name': new GLib.Variant('s', 'GSConnect'),
+            'Service': new GLib.Variant('s', BLUEZ_SERVICE_UUID),
+            'Role': new GLib.Variant('s', 'server'),
+            'Channel': new GLib.Variant('q', BLUEZ_RFCOMM_CHANNEL),
             'RequireAuthentication': new GLib.Variant('b', true),
             'ServiceRecord': new GLib.Variant('s',
                 _loadResource(`${Config.APP_ID}.sdp.xml`)),
@@ -992,16 +1027,59 @@ export const ChannelService = GObject.registerClass({
                 const devicePath = this._getDevicePath(address);
 
                 if (devicePath !== null)
-                    this._connectDevice(devicePath, this._getDeviceInfo(devicePath));
+                    this._scheduleConnectDevice(devicePath,
+                        this._getDeviceInfo(devicePath));
 
                 return;
             }
 
             for (const device of this._getCandidateDevices())
-                this._connectDevice(device.path, device.info);
+                this._scheduleConnectDevice(device.path, device.info);
         } catch (e) {
             logError(e, 'Bluetooth');
         }
+    }
+
+    _scheduleConnectDevice(devicePath, info = null) {
+        info = info || this._getDeviceInfo(devicePath);
+
+        const address = info.Address?.toUpperCase() ||
+            this._addressFromDevicePath(devicePath);
+        const uri = (address !== null) ? `bluetooth://${address}` : null;
+
+        if (uri !== null && this.channels.has(uri))
+            return;
+
+        if (this._pendingOutgoing.has(devicePath) ||
+            this._connectTimers.has(devicePath))
+            return;
+
+        const timerId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            CONNECT_DELAY_MS,
+            () => {
+                this._connectTimers.delete(devicePath);
+
+                if (uri !== null && this.channels.has(uri))
+                    return GLib.SOURCE_REMOVE;
+
+                this._connectDevice(devicePath, info);
+                return GLib.SOURCE_REMOVE;
+            }
+        );
+
+        this._connectTimers.set(devicePath, timerId);
+        debug(`delay ConnectProfile ${info.Name || info.Alias || address || devicePath} (${address || devicePath})`, 'Bluetooth');
+    }
+
+    _unscheduleConnectDevice(devicePath) {
+        const timerId = this._connectTimers.get(devicePath);
+
+        if (!timerId)
+            return;
+
+        GLib.Source.remove(timerId);
+        this._connectTimers.delete(devicePath);
     }
 
     _connectDevice(devicePath, info = null) {
@@ -1104,6 +1182,7 @@ export const ChannelService = GObject.registerClass({
         const address = info.Address?.toUpperCase() ||
             this._addressFromDevicePath(devicePath);
         const uri = `bluetooth://${address}`;
+        this._unscheduleConnectDevice(devicePath);
         const isOutgoing = this._pendingOutgoing.delete(devicePath);
         const existing = this.channels.get(uri);
         debug(`handle connection ${info.Name || info.Alias || address} ${isOutgoing ? 'outgoing' : 'incoming'} (${uri})`, 'Bluetooth');
@@ -1160,6 +1239,9 @@ export const ChannelService = GObject.registerClass({
             channel.close();
 
         this._connectAttempts.clear();
+        for (const timerId of this._connectTimers.values())
+            GLib.Source.remove(timerId);
+        this._connectTimers.clear();
         this._pendingOutgoing.clear();
         this._unregisterProfile();
 
@@ -1332,6 +1414,9 @@ export const Channel = GObject.registerClass({
     }
 
     async open(fd) {
+        // KDE Connect delays its client-side Bluetooth handshake briefly after
+        // the RFCOMM socket connects; Android drops the socket without it.
+        await _sleepAsync(500);
         await this._initConnection(fd);
         debug(`open ${this.address}`, 'Bluetooth');
         await this._receiveIdentity(this.cancellable);
