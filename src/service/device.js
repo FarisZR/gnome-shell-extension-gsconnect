@@ -200,19 +200,19 @@ const Device = GObject.registerClass({
                 return true;
 
             case 'kdeconnect.mousepad.keyboardstate':
-                return packet.body?.state !== undefined;
+                return false;
 
             case 'kdeconnect.notification.request':
                 return packet.body?.request === true;
 
             case 'kdeconnect.runcommand':
-                return packet.body?.commandList !== undefined;
+                return false;
 
             case 'kdeconnect.runcommand.request':
                 return packet.body?.requestCommandList === true;
 
             case 'kdeconnect.mpris':
-                return packet.body?.playerList !== undefined;
+                return false;
 
             case 'kdeconnect.mpris.request':
                 return packet.body?.requestPlayerList === true ||
@@ -224,14 +224,24 @@ const Device = GObject.registerClass({
         }
     }
 
-    _queuePluginTrigger() {
+    _queuePluginTrigger(pluginNames = null) {
         if (this._pluginTriggerId) {
             GLib.Source.remove(this._pluginTriggerId);
             this._pluginTriggerId = 0;
         }
 
+        const trigger = () => {
+            if (pluginNames === null) {
+                this._triggerPlugins();
+                return;
+            }
+
+            for (const name of pluginNames)
+                this._triggerPlugin(name);
+        };
+
         if (!this.connected || !this.isBluetoothConnection) {
-            this._triggerPlugins();
+            trigger();
             return;
         }
 
@@ -244,7 +254,7 @@ const Device = GObject.registerClass({
                 this._pluginTriggerId = 0;
 
                 if (this.connected && this.channel === channel)
-                    this._triggerPlugins();
+                    trigger();
 
                 return GLib.SOURCE_REMOVE;
             }
@@ -1155,7 +1165,7 @@ const Device = GObject.registerClass({
 
                 // Run the connected()/disconnected() handler
                 if (this.connected)
-                    this._queuePluginTrigger();
+                    this._queuePluginTrigger([name]);
                 else
                     plugin.disconnected();
             }
@@ -1212,6 +1222,18 @@ const Device = GObject.registerClass({
             else
                 plugin.disconnected();
         }
+    }
+
+    _triggerPlugin(name) {
+        const plugin = this._plugins.get(name);
+
+        if (!plugin)
+            return;
+
+        if (this.connected)
+            plugin.connected();
+        else
+            plugin.disconnected();
     }
 
     destroy() {

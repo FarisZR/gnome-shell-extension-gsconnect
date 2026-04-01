@@ -363,43 +363,49 @@ class MultiplexSubchannel {
     async spliceFrom(source, size = 0, cancellable = null) {
         let transferred = 0;
 
-        while (size === 0 || transferred < size) {
-            const remaining = (size > 0)
-                ? Math.min(MULTIPLEX_BUFFER_SIZE, size - transferred)
-                : MULTIPLEX_BUFFER_SIZE;
-            const bytes = await _readBytesAsync(source, remaining, cancellable);
+        try {
+            while (size === 0 || transferred < size) {
+                const remaining = (size > 0)
+                    ? Math.min(MULTIPLEX_BUFFER_SIZE, size - transferred)
+                    : MULTIPLEX_BUFFER_SIZE;
+                const bytes = await _readBytesAsync(source, remaining, cancellable);
 
-            if (bytes.get_size() === 0)
-                break;
+                if (bytes.get_size() === 0)
+                    break;
 
-            const chunk = Uint8Array.from(bytes.toArray());
-            await this.write(chunk, cancellable);
-            transferred += chunk.length;
+                const chunk = Uint8Array.from(bytes.toArray());
+                await this.write(chunk, cancellable);
+                transferred += chunk.length;
+            }
+
+            return transferred;
+        } finally {
+            this.close();
         }
-
-        this.close();
-        return transferred;
     }
 
     async spliceTo(target, size = -1, cancellable = null) {
         let transferred = 0;
 
-        while (size < 0 || transferred < size) {
-            const remaining = (size < 0)
-                ? MULTIPLEX_BUFFER_SIZE
-                : Math.min(MULTIPLEX_BUFFER_SIZE, size - transferred);
-            const chunk = await this.readChunk(remaining, cancellable);
+        try {
+            while (size < 0 || transferred < size) {
+                const remaining = (size < 0)
+                    ? MULTIPLEX_BUFFER_SIZE
+                    : Math.min(MULTIPLEX_BUFFER_SIZE, size - transferred);
+                const chunk = await this.readChunk(remaining, cancellable);
 
-            if (chunk === null)
-                break;
+                if (chunk === null)
+                    break;
 
-            await target.write_all_async(chunk, GLib.PRIORITY_DEFAULT,
-                cancellable);
-            transferred += chunk.length;
+                await target.write_all_async(chunk, GLib.PRIORITY_DEFAULT,
+                    cancellable);
+                transferred += chunk.length;
+            }
+
+            return transferred;
+        } finally {
+            this.close();
         }
-
-        this.close();
-        return transferred;
     }
 
     async write(data, cancellable = null) {
@@ -548,6 +554,17 @@ class ConnectionMultiplexer {
 
                 this._receivedProtocolVersion = true;
                 break;
+
+            case MESSAGE_OPEN_CHANNEL:
+            case MESSAGE_CLOSE_CHANNEL:
+            case MESSAGE_READ:
+            case MESSAGE_WRITE:
+                if (!this._receivedProtocolVersion)
+                    throw new Error('Bluetooth multiplex version not negotiated');
+                break;
+        }
+
+        switch (type) {
 
             case MESSAGE_OPEN_CHANNEL: {
                 const state = this._addChannel(uuid);
