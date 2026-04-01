@@ -292,6 +292,13 @@ const Manager = GObject.registerClass({
     }
 
     _shouldAcceptChannel(device, channel) {
+        const getType = address => {
+            if (typeof address !== 'string' || !address.includes('://'))
+                return '';
+
+            return address.split('://')[0];
+        };
+
         const current = device.channel;
 
         if (current === null || current.closed)
@@ -300,10 +307,10 @@ const Manager = GObject.registerClass({
         if (current === channel)
             return true;
 
-        const currentAddress = current.address;
-        const nextAddress = channel.address;
-        const currentType = currentAddress.split('://')[0];
-        const nextType = nextAddress.split('://')[0];
+        const currentAddress = current.address ?? '';
+        const nextAddress = channel.address ?? '';
+        const currentType = getType(currentAddress);
+        const nextType = getType(nextAddress);
 
         if (currentAddress === nextAddress)
             return true;
@@ -314,6 +321,9 @@ const Manager = GObject.registerClass({
             return nextType === 'bluetooth';
 
         const lastConnection = device.settings.get_string('last-connection');
+
+        if (!lastConnection)
+            return true;
 
         if (lastConnection === nextAddress)
             return true;

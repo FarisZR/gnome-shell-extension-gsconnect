@@ -269,7 +269,7 @@ const Device = GObject.registerClass({
         const remoteCert = this.channel?.peer_certificate;
 
         if (!localCert || !remoteCert) {
-            if (this.connection_type === 'bluetooth' && this.channel?.address) {
+            if (this.isBluetoothConnection && this.channel?.address) {
                 const address = this.channel.address.replace('bluetooth://', '');
                 return _('Bluetooth device at %s').format(address);
             }

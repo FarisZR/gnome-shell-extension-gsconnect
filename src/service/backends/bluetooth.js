@@ -1026,9 +1026,10 @@ export const ChannelService = GObject.registerClass({
             if (typeof address === 'string') {
                 const devicePath = this._getDevicePath(address);
 
-                if (devicePath !== null)
+                if (devicePath !== null) {
                     this._scheduleConnectDevice(devicePath,
                         this._getDeviceInfo(devicePath));
+                }
 
                 return;
             }
@@ -1127,7 +1128,7 @@ export const ChannelService = GObject.registerClass({
         });
     }
 
-    async _startAsync() {
+    _startAsync() {
         if (this._startPromise !== null)
             return this._startPromise;
 
@@ -1323,7 +1324,7 @@ export const Channel = GObject.registerClass({
         this._peerCertificate = certificate;
     }
 
-    async _initConnection(fd) {
+    _initConnection(fd) {
         this._fd = fd;
 
         const inputStream = new GioUnix.InputStream({
@@ -1436,7 +1437,7 @@ export const Channel = GObject.registerClass({
         return new Core.Packet(data);
     }
 
-    async rejectTransfer(packet) {
+    rejectTransfer(packet) {
         const uuid = packet?.payloadTransferInfo?.uuid;
 
         if (uuid !== undefined)
