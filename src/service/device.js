@@ -105,6 +105,8 @@ const Device = GObject.registerClass({
 
         this._outputLock = false;
         this._outputQueue = [];
+        this._pendingPluginNames = new Set();
+        this._pendingPluginTriggerAll = false;
 
         // GSettings
         this.settings = new Gio.Settings({
@@ -225,25 +227,31 @@ const Device = GObject.registerClass({
     }
 
     _queuePluginTrigger(pluginNames = null) {
-        if (this._pluginTriggerId) {
-            GLib.Source.remove(this._pluginTriggerId);
-            this._pluginTriggerId = 0;
-        }
-
-        const trigger = () => {
-            if (pluginNames === null) {
-                this._triggerPlugins();
-                return;
+        if (!this.connected || !this.isBluetoothConnection) {
+            if (this._pluginTriggerId) {
+                GLib.Source.remove(this._pluginTriggerId);
+                this._pluginTriggerId = 0;
             }
 
-            for (const name of pluginNames)
-                this._triggerPlugin(name);
-        };
+            this._pendingPluginTriggerAll = false;
+            this._pendingPluginNames.clear();
 
-        if (!this.connected || !this.isBluetoothConnection) {
-            trigger();
+            if (pluginNames === null)
+                this._triggerPlugins();
+            else
+                pluginNames.forEach(name => this._triggerPlugin(name));
             return;
         }
+
+        if (pluginNames === null) {
+            this._pendingPluginTriggerAll = true;
+            this._pendingPluginNames.clear();
+        } else if (!this._pendingPluginTriggerAll) {
+            pluginNames.forEach(name => this._pendingPluginNames.add(name));
+        }
+
+        if (this._pluginTriggerId)
+            return;
 
         const channel = this.channel;
 
@@ -253,8 +261,20 @@ const Device = GObject.registerClass({
             () => {
                 this._pluginTriggerId = 0;
 
-                if (this.connected && this.channel === channel)
-                    trigger();
+                if (this.connected && this.channel === channel) {
+                    const triggerAll = this._pendingPluginTriggerAll;
+
+                    if (triggerAll)
+                        this._triggerPlugins();
+                    else
+                        this._pendingPluginNames.forEach(name => this._triggerPlugin(name));
+
+                    this._pendingPluginTriggerAll = false;
+                    this._pendingPluginNames.clear();
+                } else {
+                    this._pendingPluginTriggerAll = false;
+                    this._pendingPluginNames.clear();
+                }
 
                 return GLib.SOURCE_REMOVE;
             }
@@ -436,6 +456,9 @@ const Device = GObject.registerClass({
             this._pluginTriggerId = 0;
         }
 
+        this._pendingPluginTriggerAll = false;
+        this._pendingPluginNames.clear();
+
         // If we've disconnected empty the queue, otherwise restart the read
         // loop and update the device metadata
         if (this.channel === null) {
@@ -463,8 +486,8 @@ const Device = GObject.registerClass({
         try {
             let packet = null;
 
-            while ((packet = await this.channel.readPacket())) {
-                debug(`${packet.type} <= ${this.channel.address}`, this.name);
+            while ((packet = await channel.readPacket())) {
+                debug(`${packet.type} <= ${channel.address}`, this.name);
                 debug(packet, this.name);
                 this.handlePacket(packet);
             }
@@ -557,14 +580,19 @@ const Device = GObject.registerClass({
      */
     async sendPacket(packet) {
         try {
+            const channel = this.channel;
+
             if (!this.connected)
+                return;
+
+            if (channel === null)
                 return;
 
             if (!this.paired && packet.type !== 'kdeconnect.pair')
                 return;
 
             if (this._isBluetoothStartupPacket(packet)) {
-                debug(`${packet.type} x> ${this.channel.address}`, this.name);
+                debug(`${packet.type} x> ${channel.address}`, this.name);
                 debug(packet, this.name);
                 return;
             }
@@ -578,8 +606,13 @@ const Device = GObject.registerClass({
             let next;
 
             while ((next = this._outputQueue.shift())) {
-                await this.channel.sendPacket(next);
-                debug(`${next.type} => ${this.channel.address}`, this.name);
+                if (this.channel !== channel) {
+                    this._outputQueue.unshift(next);
+                    break;
+                }
+
+                await channel.sendPacket(next);
+                debug(`${next.type} => ${channel.address}`, this.name);
                 debug(next, this.name);
             }
 
@@ -1258,6 +1291,9 @@ const Device = GObject.registerClass({
             GLib.Source.remove(this._pluginTriggerId);
             this._pluginTriggerId = 0;
         }
+
+        this._pendingPluginTriggerAll = false;
+        this._pendingPluginNames.clear();
 
         GObject.signal_handlers_destroy(this);
     }

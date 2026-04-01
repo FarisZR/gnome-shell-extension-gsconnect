@@ -887,8 +887,8 @@ export const ChannelService = GObject.registerClass({
         return match[1].replaceAll('_', ':').toUpperCase();
     }
 
-    _getCandidateDevices() {
-        const result = this._system.call_sync(
+    async _getCandidateDevices() {
+        const result = await this._system.call(
             BLUEZ_NAME,
             BLUEZ_ROOT_PATH,
             OBJECT_MANAGER_IFACE,
@@ -933,7 +933,7 @@ export const ChannelService = GObject.registerClass({
         return devices;
     }
 
-    _getDevicePath(address) {
+    async _getDevicePath(address) {
         if (address.startsWith('/org/bluez/'))
             return address;
 
@@ -942,15 +942,15 @@ export const ChannelService = GObject.registerClass({
         if (this._devicePaths.has(address))
             return this._devicePaths.get(address);
 
-        this._getCandidateDevices();
+        await this._getCandidateDevices();
         return this._devicePaths.get(address) || null;
     }
 
-    _getDeviceInfo(devicePath) {
+    async _getDeviceInfo(devicePath) {
         if (this._deviceInfos.has(devicePath))
             return this._deviceInfos.get(devicePath);
 
-        const result = this._system.call_sync(
+        const result = await this._system.call(
             BLUEZ_NAME,
             devicePath,
             PROPERTIES_IFACE,
@@ -1045,37 +1045,41 @@ export const ChannelService = GObject.registerClass({
         this.identity.body.certificate = this.certificate.certificate_pem;
     }
 
-    broadcast(address = null) {
+    async _broadcast(address = null) {
         try {
             if (!this.active && this._startPromise === null)
                 return;
 
             if (!this._registered) {
-                void this._startAsync().then(() => this.broadcast(address))
+                void this._startAsync().then(() => this._broadcast(address))
                     .catch(e => debug(e, 'Bluetooth'));
                 return;
             }
 
             if (typeof address === 'string') {
-                const devicePath = this._getDevicePath(address);
+                const devicePath = await this._getDevicePath(address);
 
                 if (devicePath !== null) {
-                    this._scheduleConnectDevice(devicePath,
-                        this._getDeviceInfo(devicePath));
+                    await this._scheduleConnectDevice(devicePath,
+                        await this._getDeviceInfo(devicePath));
                 }
 
                 return;
             }
 
-            for (const device of this._getCandidateDevices())
-                this._scheduleConnectDevice(device.path, device.info);
+            for (const device of await this._getCandidateDevices())
+                await this._scheduleConnectDevice(device.path, device.info);
         } catch (e) {
             logError(e, 'Bluetooth');
         }
     }
 
-    _scheduleConnectDevice(devicePath, info = null) {
-        info = info || this._getDeviceInfo(devicePath);
+    broadcast(address = null) {
+        void this._broadcast(address);
+    }
+
+    async _scheduleConnectDevice(devicePath, info = null) {
+        info = info || await this._getDeviceInfo(devicePath);
 
         const address = info.Address?.toUpperCase() ||
             this._addressFromDevicePath(devicePath);
@@ -1097,7 +1101,8 @@ export const ChannelService = GObject.registerClass({
                 if (uri !== null && this.channels.has(uri))
                     return GLib.SOURCE_REMOVE;
 
-                this._connectDevice(devicePath, info);
+                void this._connectDevice(devicePath, info).catch(
+                    e => debug(e, 'Bluetooth'));
                 return GLib.SOURCE_REMOVE;
             }
         );
@@ -1126,8 +1131,8 @@ export const ChannelService = GObject.registerClass({
         this._connectTimeouts.delete(devicePath);
     }
 
-    _connectDevice(devicePath, info = null) {
-        info = info || this._getDeviceInfo(devicePath);
+    async _connectDevice(devicePath, info = null) {
+        info = info || await this._getDeviceInfo(devicePath);
 
         const address = info.Address?.toUpperCase() ||
             this._addressFromDevicePath(devicePath);
@@ -1237,7 +1242,7 @@ export const ChannelService = GObject.registerClass({
     }
 
     async _handleNewConnection(devicePath, fd) {
-        const info = this._getDeviceInfo(devicePath);
+        const info = await this._getDeviceInfo(devicePath);
         const address = info.Address?.toUpperCase() ||
             this._addressFromDevicePath(devicePath);
         const uri = `bluetooth://${address}`;
