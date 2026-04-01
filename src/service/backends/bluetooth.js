@@ -38,6 +38,7 @@ const MULTIPLEX_BUFFER_SIZE = 4096;
 const MULTIPLEX_DEFAULT_CHANNEL = 'a0d0aaf4-1072-4d81-aa35-902a954b1266';
 const CONNECT_RETRY_SECONDS = 15;
 const CONNECT_DELAY_MS = 20000;
+const CONNECT_TIMEOUT_MS = 10000;
 
 const MESSAGE_PROTOCOL_VERSION = 0;
 const MESSAGE_OPEN_CHANNEL = 1;
@@ -585,9 +586,26 @@ class ConnectionMultiplexer {
                 if (state === undefined || !state.connected)
                     return;
 
+                const allowedLength = Math.min(
+                    data.length,
+                    Math.max(0, state.requestedReadAmount)
+                );
+
                 state.requestedReadAmount = Math.max(0,
-                    state.requestedReadAmount - data.length);
-                state.readBuffer = _appendBytes(state.readBuffer, data);
+                    state.requestedReadAmount - allowedLength);
+
+                if (allowedLength > 0) {
+                    state.readBuffer = _appendBytes(
+                        state.readBuffer,
+                        data.slice(0, allowedLength)
+                    );
+                }
+
+                if (allowedLength < data.length) {
+                    debug(`dropping ${data.length - allowedLength} overflow bytes for ${uuid}`,
+                        'Bluetooth');
+                }
+
                 this._notify(state, 'read');
                 break;
             }
@@ -819,6 +837,7 @@ export const ChannelService = GObject.registerClass({
 
         this._registered = false;
         this._connectAttempts = new Map();
+        this._connectTimeouts = new Map();
         this._connectTimers = new Map();
         this._deviceInfos = new Map();
         this._devicePaths = new Map();
@@ -1080,6 +1099,16 @@ export const ChannelService = GObject.registerClass({
         this._connectTimers.delete(devicePath);
     }
 
+    _clearConnectTimeout(devicePath) {
+        const timerId = this._connectTimeouts.get(devicePath);
+
+        if (!timerId)
+            return;
+
+        GLib.Source.remove(timerId);
+        this._connectTimeouts.delete(devicePath);
+    }
+
     _connectDevice(devicePath, info = null) {
         info = info || this._getDeviceInfo(devicePath);
 
@@ -1114,7 +1143,22 @@ export const ChannelService = GObject.registerClass({
             Gio.DBusCallFlags.NONE,
             -1,
             null
-        ).catch(e => {
+        ).then(() => {
+            this._clearConnectTimeout(devicePath);
+
+            const timeoutId = GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT,
+                CONNECT_TIMEOUT_MS,
+                () => {
+                    this._connectTimeouts.delete(devicePath);
+                    this._pendingOutgoing.delete(devicePath);
+                    return GLib.SOURCE_REMOVE;
+                }
+            );
+
+            this._connectTimeouts.set(devicePath, timeoutId);
+        }).catch(e => {
+            this._clearConnectTimeout(devicePath);
             this._pendingOutgoing.delete(devicePath);
 
             if (e.message?.includes('InProgress') ||
@@ -1181,6 +1225,7 @@ export const ChannelService = GObject.registerClass({
             this._addressFromDevicePath(devicePath);
         const uri = `bluetooth://${address}`;
         this._unscheduleConnectDevice(devicePath);
+        this._clearConnectTimeout(devicePath);
         const isOutgoing = this._pendingOutgoing.delete(devicePath);
         const existing = this.channels.get(uri);
         debug(`handle connection ${info.Name || info.Alias || address} ${isOutgoing ? 'outgoing' : 'incoming'} (${uri})`, 'Bluetooth');
@@ -1238,6 +1283,9 @@ export const ChannelService = GObject.registerClass({
             channel.close();
 
         this._connectAttempts.clear();
+        for (const timerId of this._connectTimeouts.values())
+            GLib.Source.remove(timerId);
+        this._connectTimeouts.clear();
         for (const timerId of this._connectTimers.values())
             GLib.Source.remove(timerId);
         this._connectTimers.clear();

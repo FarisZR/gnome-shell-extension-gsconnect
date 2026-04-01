@@ -7,4 +7,4 @@ _build
 webextension/*.zip
 /node_modules
 /package-lock.json
-/kde-reference
+/kde-reference/

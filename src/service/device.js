@@ -1155,7 +1155,7 @@ const Device = GObject.registerClass({
 
                 // Run the connected()/disconnected() handler
                 if (this.connected)
-                    plugin.connected();
+                    this._queuePluginTrigger();
                 else
                     plugin.disconnected();
             }
