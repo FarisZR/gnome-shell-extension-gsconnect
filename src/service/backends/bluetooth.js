@@ -620,21 +620,27 @@ class ConnectionMultiplexer {
             return Promise.resolve(state.wrapper);
 
         return new Promise((resolve, reject) => {
+            if (cancellable instanceof Gio.Cancellable && cancellable.is_cancelled()) {
+                reject(_cancelledError());
+                return;
+            }
+
             const waiters = this._channelWaiters.get(uuid) || [];
-            waiters.push(resolve);
+            let cancelledId = 0;
+            const waiter = (channel) => {
+                if (cancelledId > 0)
+                    cancellable.disconnect(cancelledId);
+
+                resolve(channel);
+            };
+
+            waiters.push(waiter);
             this._channelWaiters.set(uuid, waiters);
 
-            let cancelledId = 0;
-
             if (cancellable instanceof Gio.Cancellable) {
-                if (cancellable.is_cancelled()) {
-                    reject(_cancelledError());
-                    return;
-                }
-
                 cancelledId = cancellable.connect(() => {
                     const channelWaiters = this._channelWaiters.get(uuid) || [];
-                    const index = channelWaiters.indexOf(resolve);
+                    const index = channelWaiters.indexOf(waiter);
 
                     if (index > -1)
                         channelWaiters.splice(index, 1);
@@ -645,15 +651,6 @@ class ConnectionMultiplexer {
                     reject(_cancelledError());
                 });
             }
-
-            const wrappedResolve = (channel) => {
-                if (cancelledId > 0)
-                    cancellable.disconnect(cancelledId);
-
-                resolve(channel);
-            };
-
-            waiters[waiters.length - 1] = wrappedResolve;
         });
     }
 
@@ -1194,7 +1191,8 @@ export const ChannelService = GObject.registerClass({
             devicePath: devicePath,
         });
 
-        this.channels.set(uri, channel);
+        if (existing === undefined || existing.closed)
+            this.channels.set(uri, channel);
 
         try {
             if (isOutgoing)
@@ -1382,7 +1380,9 @@ export const Channel = GObject.registerClass({
         this._closed = true;
         this.notify('closed');
 
-        this.backend.channels.delete(this.address);
+        if (this.backend.channels.get(this.address) === this)
+            this.backend.channels.delete(this.address);
+
         this.cancellable.cancel();
 
         if (this._multiplexer)

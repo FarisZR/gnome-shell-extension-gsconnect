@@ -83,8 +83,10 @@ const RunCommandPlugin = GObject.registerClass({
     connected() {
         super.connected();
 
-        if (this.device.isBluetoothConnection)
+        if (this.device.isBluetoothConnection) {
+            this.device.lookup_action('commands').enabled = false;
             return;
+        }
 
         this._sendCommandList();
         this._requestCommandList();
@@ -100,8 +102,10 @@ const RunCommandPlugin = GObject.registerClass({
         if (!this.device.connected)
             return;
 
-        if (this.device.isBluetoothConnection)
+        if (this.device.isBluetoothConnection) {
+            this.device.lookup_action('commands').enabled = false;
             return;
+        }
 
         this._sendCommandList();
         this._requestCommandList();

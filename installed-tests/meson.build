@@ -23,6 +23,7 @@ test_env.set('G_DEBUG', 'fatal-warnings,fatal-criticals')
 test_config = configuration_data()
 test_config.set('G_TEST_BUILDDIR', installed_tests_builddir)
 test_config.set('MESON_BUILD_ROOT', meson.project_build_root())
+test_config.set('PACKAGE_DATADIR', extdatadir)
 
 test_config_js = configure_file(
   input: './config.js.in',

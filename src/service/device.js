@@ -13,7 +13,10 @@ import plugins from './plugins/index.js';
 
 const ALLOWED_TIMESTAMP_TIME_DIFFERENCE_SECONDS = 1800; // 30 min
 const BLUETOOTH_STARTUP_FILTER_MS = 5000;
-const BLUETOOTH_PLUGIN_CONNECTED_DELAY_MS = 2000;
+const BLUETOOTH_PLUGIN_CONNECTED_DELAY_MS = Math.max(
+    2000,
+    BLUETOOTH_STARTUP_FILTER_MS
+);
 
 /**
  * An object representing a remote device.
@@ -435,13 +438,14 @@ const Device = GObject.registerClass({
             this._readLoop(channel);
         }
 
-        // The connected state didn't change
-        if (this.connected === !!this.channel)
-            return;
+        const connected = !!this.channel;
+        const connectionChanged = (this.connected !== connected);
 
-        // Notify and trigger plugins
-        this._connected = !!this.channel;
-        this.notify('connected');
+        this._connected = connected;
+
+        if (connectionChanged)
+            this.notify('connected');
+
         this._queuePluginTrigger();
     }
 
