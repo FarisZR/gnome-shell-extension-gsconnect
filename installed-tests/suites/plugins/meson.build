@@ -26,7 +26,12 @@ plugin_tests = [
 
 
 foreach test : plugin_tests
-  test_file = files('test@0@.js'.format(test))
+  test_source = files('test@0@.js'.format(test))
+  test_file = configure_file(
+    input: 'test@0@.js'.format(test),
+    output: 'test@0@.js'.format(test),
+    copy: true,
+  )
 
   test(test, minijasmine,
         args: [test_file],
@@ -49,9 +54,8 @@ foreach test : plugin_tests
         install_dir: plugin_tests_metadir,
     )
 
-    install_data(test_file,
+    install_data(test_source,
       install_dir: plugin_tests_execdir,
     )
   endif
 endforeach
-

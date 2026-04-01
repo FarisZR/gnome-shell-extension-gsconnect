@@ -12,8 +12,6 @@ SPDX-License-Identifier: GPL-2.0-or-later
     <sequence>
       <!-- Custom UUID -->
       <uuid value="185f3df4-3268-4e3f-9fca-d4d5059915bd" />
-      <!-- Custom UUID hex for Android -->
-      <uuid value="185f3df432684e3f9fcad4d5059915bd" />
       <!-- SPP (Serial Port Profile) -->
       <uuid value="0x1101" />
     </sequence>
@@ -25,10 +23,12 @@ SPDX-License-Identifier: GPL-2.0-or-later
   <!-- ProtocolDescriptorList -->
   <attribute id="0x0004">
     <sequence>
-      <!-- RFCOMM -->
+      <sequence>
+        <uuid value="0x0100" />
+      </sequence>
       <sequence>
         <uuid value="0x0003" />
-        <!-- <uint8 value="0x06" /> -->
+        <uint8 value="0x06" />
       </sequence>
     </sequence>
   </attribute>
@@ -41,7 +41,10 @@ SPDX-License-Identifier: GPL-2.0-or-later
   <!-- BluetoothProfileDescriptorList -->
   <attribute id="0x0009">
     <sequence>
-      <uuid value="0x1101" />
+      <sequence>
+        <uuid value="0x1101" />
+        <uint16 value="0x0102" />
+      </sequence>
     </sequence>
   </attribute>
   <!-- Service name -->

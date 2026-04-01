@@ -188,6 +188,9 @@ const NotificationPlugin = GObject.registerClass({
     connected() {
         super.connected();
 
+        if (this.device.isBluetoothConnection)
+            return;
+
         this._requestNotifications();
     }
 

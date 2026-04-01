@@ -2,4 +2,13 @@
 //
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-export { default } from 'file://@PACKAGE_DATADIR@/config.js';
+import GLib from 'gi://GLib';
+
+const currentPath = GLib.filename_from_uri(import.meta.url)[0];
+const configPath = currentPath.startsWith('@G_TEST_BUILDDIR@')
+    ? '@MESON_BUILD_ROOT@/data/config.js'
+    : '@PACKAGE_DATADIR@/config.js';
+
+const {default: Config} = await import(`file://${configPath}`);
+
+export default Config;
