@@ -12,6 +12,11 @@ import * as Core from './core.js';
 import plugins from './plugins/index.js';
 
 const ALLOWED_TIMESTAMP_TIME_DIFFERENCE_SECONDS = 1800; // 30 min
+const BLUETOOTH_STARTUP_FILTER_MS = 5000;
+const BLUETOOTH_PLUGIN_CONNECTED_DELAY_MS = Math.max(
+    2000,
+    BLUETOOTH_STARTUP_FILTER_MS
+);
 
 /**
  * An object representing a remote device.
@@ -100,6 +105,8 @@ const Device = GObject.registerClass({
 
         this._outputLock = false;
         this._outputQueue = [];
+        this._pendingPluginNames = new Set();
+        this._pendingPluginTriggerAll = false;
 
         // GSettings
         this.settings = new Gio.Settings({
@@ -172,6 +179,108 @@ const Device = GObject.registerClass({
         return lastConnection.split('://')[0];
     }
 
+    get isBluetoothConnection() {
+        return this.channel?.address?.startsWith('bluetooth://') || false;
+    }
+
+    _isBluetoothStartupPacket(packet) {
+        if (!this.isBluetoothConnection || !this._connectedAt)
+            return false;
+
+        if (Date.now() - this._connectedAt >= BLUETOOTH_STARTUP_FILTER_MS)
+            return false;
+
+        switch (packet.type) {
+            case 'kdeconnect.battery.request':
+                return packet.body?.request === true;
+
+            case 'kdeconnect.connectivity_report.request':
+                return true;
+
+            case 'kdeconnect.contacts.request_all_uids_timestamps':
+            case 'kdeconnect.sms.request_conversations':
+                return true;
+
+            case 'kdeconnect.mousepad.keyboardstate':
+                return false;
+
+            case 'kdeconnect.notification.request':
+                return packet.body?.request === true;
+
+            case 'kdeconnect.runcommand':
+                return false;
+
+            case 'kdeconnect.runcommand.request':
+                return packet.body?.requestCommandList === true;
+
+            case 'kdeconnect.mpris':
+                return false;
+
+            case 'kdeconnect.mpris.request':
+                return packet.body?.requestPlayerList === true ||
+                    packet.body?.requestNowPlaying === true ||
+                    packet.body?.requestVolume === true;
+
+            default:
+                return false;
+        }
+    }
+
+    _queuePluginTrigger(pluginNames = null) {
+        if (!this.connected || !this.isBluetoothConnection) {
+            if (this._pluginTriggerId) {
+                GLib.Source.remove(this._pluginTriggerId);
+                this._pluginTriggerId = 0;
+            }
+
+            this._pendingPluginTriggerAll = false;
+            this._pendingPluginNames.clear();
+
+            if (pluginNames === null)
+                this._triggerPlugins();
+            else
+                pluginNames.forEach(name => this._triggerPlugin(name));
+            return;
+        }
+
+        if (pluginNames === null) {
+            this._pendingPluginTriggerAll = true;
+            this._pendingPluginNames.clear();
+        } else if (!this._pendingPluginTriggerAll) {
+            pluginNames.forEach(name => this._pendingPluginNames.add(name));
+        }
+
+        if (this._pluginTriggerId)
+            return;
+
+        const channel = this.channel;
+
+        this._pluginTriggerId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            BLUETOOTH_PLUGIN_CONNECTED_DELAY_MS,
+            () => {
+                this._pluginTriggerId = 0;
+
+                if (this.connected && this.channel === channel) {
+                    const triggerAll = this._pendingPluginTriggerAll;
+
+                    if (triggerAll)
+                        this._triggerPlugins();
+                    else
+                        this._pendingPluginNames.forEach(name => this._triggerPlugin(name));
+
+                    this._pendingPluginTriggerAll = false;
+                    this._pendingPluginNames.clear();
+                } else {
+                    this._pendingPluginTriggerAll = false;
+                    this._pendingPluginNames.clear();
+                }
+
+                return GLib.SOURCE_REMOVE;
+            }
+        );
+    }
+
     get contacts() {
         const contacts = this._plugins.get('contacts');
 
@@ -189,17 +298,17 @@ const Device = GObject.registerClass({
         if (!this.channel)
             return '';
 
-        // Bluetooth connections have no certificate so we use the host address
-        if (this.connection_type === 'bluetooth') {
-            // TRANSLATORS: Bluetooth address for remote device
-            return _('Bluetooth device at %s').format('???');
-        }
-
-        // FIXME: another ugly reach-around
-        const localCert = this.service.manager.backends.get('lan')?.certificate;
+        const localCert = this.service?.manager?.certificate;
         const remoteCert = this.channel?.peer_certificate;
-        if (!localCert || !remoteCert)
+
+        if (!localCert || !remoteCert) {
+            if (this.isBluetoothConnection && this.channel?.address) {
+                const address = this.channel.address.replace('bluetooth://', '');
+                return _('Bluetooth device at %s').format(address);
+            }
+
             return '';
+        }
 
         const checksum = new GLib.Checksum(GLib.ChecksumType.SHA256);
         let [a, b] = [localCert.pubkey_der(), remoteCert.pubkey_der()];
@@ -342,30 +451,43 @@ const Device = GObject.registerClass({
 
         this._channel = channel;
 
+        if (this._pluginTriggerId) {
+            GLib.Source.remove(this._pluginTriggerId);
+            this._pluginTriggerId = 0;
+        }
+
+        this._pendingPluginTriggerAll = false;
+        this._pendingPluginNames.clear();
+
         // If we've disconnected empty the queue, otherwise restart the read
         // loop and update the device metadata
         if (this.channel === null) {
             this._outputQueue.length = 0;
+            this._connectedAt = 0;
         } else {
+            channel.device = this;
+            this._connectedAt = Date.now();
             this._handleIdentity(this.channel.identity);
             this._readLoop(channel);
         }
 
-        // The connected state didn't change
-        if (this.connected === !!this.channel)
-            return;
+        const connected = !!this.channel;
+        const connectionChanged = (this.connected !== connected);
 
-        // Notify and trigger plugins
-        this._connected = !!this.channel;
-        this.notify('connected');
-        this._triggerPlugins();
+        this._connected = connected;
+
+        if (connectionChanged)
+            this.notify('connected');
+
+        this._queuePluginTrigger();
     }
 
     async _readLoop(channel) {
         try {
             let packet = null;
 
-            while ((packet = await this.channel.readPacket())) {
+            while ((packet = await channel.readPacket())) {
+                debug(`${packet.type} <= ${channel.address}`, this.name);
                 debug(packet, this.name);
                 this.handlePacket(packet);
             }
@@ -458,11 +580,22 @@ const Device = GObject.registerClass({
      */
     async sendPacket(packet) {
         try {
+            const channel = this.channel;
+
             if (!this.connected)
+                return;
+
+            if (channel === null)
                 return;
 
             if (!this.paired && packet.type !== 'kdeconnect.pair')
                 return;
+
+            if (this._isBluetoothStartupPacket(packet)) {
+                debug(`${packet.type} x> ${channel.address}`, this.name);
+                debug(packet, this.name);
+                return;
+            }
 
             this._outputQueue.push(new Core.Packet(packet));
 
@@ -473,7 +606,13 @@ const Device = GObject.registerClass({
             let next;
 
             while ((next = this._outputQueue.shift())) {
-                await this.channel.sendPacket(next);
+                if (this.channel !== channel) {
+                    this._outputQueue.unshift(next);
+                    break;
+                }
+
+                await channel.sendPacket(next);
+                debug(`${next.type} => ${channel.address}`, this.name);
                 debug(next, this.name);
             }
 
@@ -912,16 +1051,16 @@ const Device = GObject.registerClass({
     _setPaired(paired) {
         this._resetPairRequest();
 
-        // For TCP connections we store or reset the TLS Certificate
-        if (this.connection_type === 'lan') {
-            if (paired) {
+        if (paired) {
+            if (this.channel?.peer_certificate) {
                 this.settings.set_string(
                     'certificate-pem',
                     this.channel.peer_certificate.certificate_pem
                 );
-            } else {
-                this.settings.reset('certificate-pem');
             }
+
+        } else {
+            this.settings.reset('certificate-pem');
         }
 
         // If we've become unpaired, stop all subprocesses and transfers
@@ -951,7 +1090,7 @@ const Device = GObject.registerClass({
             if (this._incomingPairRequest) {
                 if (this.identity?.body.protocolVersion >= 8) {
                     const currentTimestamp = Math.floor(Date.now() / 1000);
-                    const diffTimestamp = Number.abs(this._pairingTimestamp - currentTimestamp);
+                    const diffTimestamp = Math.abs(this._pairingTimestamp - currentTimestamp);
                     if (diffTimestamp > ALLOWED_TIMESTAMP_TIME_DIFFERENCE_SECONDS) {
                         this._setPaired(false);
                         this.showNotification({
@@ -1059,7 +1198,7 @@ const Device = GObject.registerClass({
 
                 // Run the connected()/disconnected() handler
                 if (this.connected)
-                    plugin.connected();
+                    this._queuePluginTrigger([name]);
                 else
                     plugin.disconnected();
             }
@@ -1118,6 +1257,18 @@ const Device = GObject.registerClass({
         }
     }
 
+    _triggerPlugin(name) {
+        const plugin = this._plugins.get(name);
+
+        if (!plugin)
+            return;
+
+        if (this.connected)
+            plugin.connected();
+        else
+            plugin.disconnected();
+    }
+
     destroy() {
         // Drop the default contacts store if we were using it
         if (this._contacts !== undefined)
@@ -1135,6 +1286,14 @@ const Device = GObject.registerClass({
         this.settings.disconnect(this._disabledPluginsChangedId);
         this.settings.disconnect(this._supportedPluginsChangedId);
         this.settings.run_dispose();
+
+        if (this._pluginTriggerId) {
+            GLib.Source.remove(this._pluginTriggerId);
+            this._pluginTriggerId = 0;
+        }
+
+        this._pendingPluginTriggerAll = false;
+        this._pendingPluginNames.clear();
 
         GObject.signal_handlers_destroy(this);
     }

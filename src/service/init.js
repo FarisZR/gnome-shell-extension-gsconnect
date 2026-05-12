@@ -123,7 +123,7 @@ globalThis.HAVE_GNOME = GLib.getenv('GSCONNECT_MODE')?.toLowerCase() !== 'cli' &
  * @param {Error|string} message - A string or Error to log
  * @param {string} [prefix] - An optional prefix for the warning
  */
-const _debugCallerMatch = new RegExp(/^([^@]+)@(.*):(\d+):(\d+)$/);
+const _debugCallerMatch = new RegExp(/^([^@]*)@(.*):(\d+):(\d+)$/);
 // eslint-disable-next-line func-style
 const _debugFunc = function (error, prefix = null) {
     let caller, message;
@@ -139,7 +139,10 @@ const _debugFunc = function (error, prefix = null) {
     if (prefix)
         message = `${prefix}: ${message}`;
 
-    const [, func, file, line] = _debugCallerMatch.exec(caller);
+    const match = _debugCallerMatch.exec(caller?.trim() ?? '');
+    const func = match?.[1] || '<top-level>';
+    const file = match?.[2] || import.meta.url;
+    const line = match?.[3] || '0';
     let script = file.replace(Config.PACKAGE_DATADIR, '');
     if (script.startsWith('file:///'))
         script = script.slice(8);
