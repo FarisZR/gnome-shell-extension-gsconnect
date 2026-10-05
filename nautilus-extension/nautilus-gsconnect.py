@@ -22,7 +22,6 @@ gi.require_version("GLib", "2.0")
 gi.require_version("GObject", "2.0")
 from gi.repository import Gio, GLib, GObject
 
-
 # Host application detection
 #
 # Nemo seems to reliably identify itself as 'nemo' in argv[0], so we

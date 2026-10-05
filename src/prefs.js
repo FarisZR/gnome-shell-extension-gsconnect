@@ -26,8 +26,9 @@ export default class GSConnectExtensionPreferences extends ExtensionPreferences 
             window.close();
         });
 
+        const launcher = GLib.build_filenamev([this.path, 'gsconnect-preferences']);
         const _launcher = Gio.SubprocessLauncher.new({flags: Gio.SubprocessFlags.NONE});
         _launcher.set_cwd(this.path);
-        _launcher.spawnv(['gjs', '-m', 'gsconnect-preferences.js']);
+        _launcher.spawnv([launcher]);
     }
 }

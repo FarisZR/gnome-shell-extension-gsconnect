@@ -11,6 +11,7 @@ import * as Core from './core.js';
 import * as DBus from './utils/dbus.js';
 import Device from './device.js';
 
+import * as BluetoothBackend from './backends/bluetooth.js';
 import * as LanBackend from './backends/lan.js';
 
 import {MissingOpensslError} from '../utils/exceptions.js';
@@ -21,6 +22,7 @@ const DEVICE_IFACE = Config.DBUS.lookup_interface(DEVICE_NAME);
 
 
 const backends = {
+    bluetooth: BluetoothBackend,
     lan: LanBackend,
 };
 
@@ -278,12 +280,58 @@ const Manager = GObject.registerClass({
                     return false;
             }
 
+            if (!this._shouldAcceptChannel(device, channel))
+                return false;
+
             device.setChannel(channel);
             return true;
         } catch (e) {
             logError(e, backend.name);
             return false;
         }
+    }
+
+    _shouldAcceptChannel(device, channel) {
+        const getType = address => {
+            if (typeof address !== 'string' || !address.includes('://'))
+                return '';
+
+            return address.split('://')[0];
+        };
+
+        const current = device.channel;
+
+        if (current === null || current.closed)
+            return true;
+
+        if (current === channel)
+            return true;
+
+        const currentAddress = current.address ?? '';
+        const nextAddress = channel.address ?? '';
+        const currentType = getType(currentAddress);
+        const nextType = getType(nextAddress);
+
+        if (currentAddress === nextAddress)
+            return true;
+
+        // Keep an unpaired device on Bluetooth while pairing completes instead
+        // of bouncing back to LAN as soon as both transports are available.
+        if (!device.paired && currentType !== nextType)
+            return nextType === 'bluetooth';
+
+        const lastConnection = device.settings.get_string('last-connection');
+
+        if (!lastConnection)
+            return true;
+
+        if (lastConnection === nextAddress)
+            return true;
+
+        if (lastConnection === currentAddress)
+            return false;
+
+        return false;
     }
 
     _loadBackends() {

@@ -69,6 +69,9 @@ const MPRISPlugin = GObject.registerClass({
     connected() {
         super.connected();
 
+        if (this.device.isBluetoothConnection)
+            return;
+
         this._requestPlayerList();
         this._sendPlayerList();
     }

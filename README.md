@@ -30,6 +30,26 @@ With GSConnect you can securely connect to mobile devices and other desktops to:
 Please see the **[Wiki][wiki]** for more information about
 **[Features][features]** and **[Help][help]**.
 
+## Fork Notes
+
+This fork includes a working Bluetooth transport for GSConnect in addition to
+the existing LAN transport.
+
+### Bluetooth Transport In This Fork
+
+- Registers a BlueZ `Profile1` service for KDE Connect's Bluetooth UUID.
+- Publishes an RFCOMM SDP record Android can discover with SDP.
+- Uses the KDE Connect Bluetooth multiplexer over a single RFCOMM socket.
+- Supports both accepted sockets and `ConnectProfile()` sockets correctly.
+- Adds Bluetooth-specific startup delays and packet suppression to avoid early
+  Android disconnects during plugin startup.
+
+The practical effect is that Android can discover the GNOME host over Bluetooth,
+initiate the correct client-side connection path, and stay connected long enough
+for GSConnect to operate normally.
+
+Implementation details are documented in `docs/bluetooth-transport.md`.
+
 ## Project Status
 
 GSConnect is now under the GitHub organisation [GSConnect][gsconnect-org].
